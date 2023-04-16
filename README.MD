@@ -2,9 +2,6 @@
 
 [![Build Status](https://github.com/bubunyo/go-rpc/workflows/test-unit/badge.svg)](https://github.com/bubunyo/go-rpc/actions?query=branch%3Amaster+workflow%3Atest-unit)
 ![GoDoc](https://godoc.org/github.com/bubunyo/go-rpc?status.svg)
-[![Coverage Status](https://codecov.io/gh/bubunyo/go-rpc/branch/master/graph/badge.svg)](https://codecov.io/gh/bubunyo/go-rpc)
-[![GoDevDoc](https://img.shields.io/badge/dev-doc-00ADD8?logo=go)](https://pkg.go.dev/github.com/bubunyo/go-rpc)
-![Code lines](https://sloc.xyz/github/bubunyo/go-rpc/?category=code)
 
 A simple resource for creating JSON RPC servers to comply with
 the [JSON RPC Spec](https://www.jsonrpc.org/specification)
@@ -17,29 +14,87 @@ the [JSON RPC Spec](https://www.jsonrpc.org/specification)
 
 ## Example Usage
 
-```go
-// 1. Create you service
-type EchoService struct{}
+1. Setup a Ping service
 
-func (e EchoService) Echo(_ context.Context, req *rpc.RequestParams) (any, error) {
-return "echo: " + string(req.Payload),
+```go
+package main
+
+type PingService struct{}
+
+func (e PingService) Echo(_ context.Context, req *rpc.RequestParams) (any, error) {
+	return "ok", nil
 }
 
-// 2. Create Server
-server := rpc.NewServer()
-server.ExectuionTimeout = 15 * time.Second // max time a function should execute for.
-server.MaxBytesRead = 1 << 20 // (1mb) - the maximum size of the total request payload 
+func main() {
+	server := rpc.NewServer()
+	server.ExecutionTimeout = 15 * time.Second // max time a function should execute for.
+	server.MaxBytesRead = 1 << 20              // (1mb) - the maximum size of the total request payload
 
-// 3. Initiate Echo Service and register a method
-echo := EchoService{}
-echoService := rpc.NewService("EchoService")
-echoService.RegisterMethod("Ping", echo.Ping)
+	ping := PingService{}
+	pingService := rpc.NewService("PingService")
+	pingService.RegisterMethod("Ping", ping.Echo)
 
-// 4. Add Echo Service to rpc server
-server.AddService(echoService)
+	server.AddService(pingService)
 
-// 5. Create and start your server. 
-mux := http.NewServeMux()
-mux.Handle("/rpc", server)
-log.Fatalln(http.ListenAndServe(":8080", mux))
+	mux := http.NewServeMux()
+	mux.Handle("/rpc", server)
+	log.Fatalln(http.ListenAndServe(":8080", mux))
+}
+```
+
+You can consume a single ping service resource with this curl request
+
+```shell
+curl -X POST  localhost:8080/rpc \
+-d '{
+        "jsonrpc": "2.0",
+        "id": null,
+        "method": "PingService.Ping",
+        "params": null
+}'
+```
+with the following outpur
+```shell
+{
+	"jsonrpc": "2.0",
+	"id": null,
+	"result": "ok"
+}
+
+```
+
+or multiple resources using 
+```shell
+~ curl -X POST  localhost:8080/rpc -d '[{
+        "jsonrpc": "2.0",
+        "id": null,
+        "method": "PingService.Ping",
+        "params": null
+}, {
+        "jsonrpc": "2.0",
+        "id": null,
+        "method": "PingService.Ping",
+        "params": null
+}, {
+        "jsonrpc": "2.0",
+        "id": null,
+        "method": "PingService.Ping",
+        "params": null
+}]'
+```
+with the following output 
+```shell
+[{
+	"jsonrpc": "2.0",
+	"id": null,
+	"result": "ok"
+}, {
+	"jsonrpc": "2.0",
+	"id": null,
+	"result": "ok"
+}, {
+	"jsonrpc": "2.0",
+	"id": null,
+	"result": "ok"
+}]
 ```
