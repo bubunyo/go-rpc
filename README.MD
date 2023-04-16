@@ -1,7 +1,7 @@
 # go-rpc
 
 [![Build Status](https://github.com/bubunyo/go-rpc/workflows/test-unit/badge.svg)](https://github.com/bubunyo/go-rpc/actions?query=branch%3Amaster+workflow%3Atest-unit)
-![GoDoc](https://godoc.org/github.com/bubunyo/go-rpc?status.svg)
+[![GoDoc](https://godoc.org/github.com/bubunyo/go-rpc?status.svg)](https://pkg.go.dev/github.com/bubunyo/go-rpc)
 
 A simple resource for creating JSON RPC servers to comply with
 the [JSON RPC Spec](https://www.jsonrpc.org/specification)
