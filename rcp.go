@@ -12,7 +12,10 @@ import (
 	"time"
 )
 
-const Version = "2.0"
+const (
+	Version      = "2.0"   // JSON RPC Version
+	MaxBytesRead = 1 << 20 // 1mb
+)
 
 var (
 	defaultReq = Request{JsonRpc: Version}
@@ -23,38 +26,28 @@ func NewServer() *Service {
 	return NewService("")
 }
 
-const (
-	MaxBytesRead = 1 << 20 // 1mb
-)
-
 type (
 	Service struct {
 		name      string
 		methodMap map[string]func(context.Context, *RequestParams) (any, error)
-
 		// ExecutionTimeout is the maximum time a method should execute for. If the
 		// execution exceeds the timeout, and ExectutionTimeout Error is returned for
 		// that request
 		ExecutionTimeout time.Duration
-
+		// MaxBytesRead is the maximum bytes a request object can contain
 		MaxBytesRead int64
 	}
 	Request struct {
-		// must always be 2.0
-		JsonRpc string `json:"jsonrpc"`
-		// should be a string, number or null, if it is not included then the request is a notification.
-		Id     any    `json:"id"`
-		Method string `json:"method"`
-		Params any    `json:"params"`
+		JsonRpc string `json:"jsonrpc"` // must always be 2.0
+		Id      any    `json:"id"`      // should be a string, number or null.
+		Method  string `json:"method"`  // the method being called
+		Params  any    `json:"params"`  // the params for the method being called
 	}
 	Response struct {
-		// must always be 2.0
-		JsonRpc string `json:"jsonrpc,omitempty"`
-		Id      any    `json:"id"`
-		// required when the request is successful
-		Result any `json:"result,omitempty"`
-		// required when the request is a failure
-		Error *Error `json:"error,omitempty"`
+		JsonRpc string `json:"jsonrpc,omitempty"` // must always be 2.0
+		Id      any    `json:"id"`                // the id passed in the request object
+		Result  any    `json:"result,omitempty"`  // required when the request is successful
+		Error   *Error `json:"error,omitempty"`   // required when the request is a failure
 	}
 	RequestParams struct {
 		Payload []byte

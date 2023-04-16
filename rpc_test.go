@@ -23,7 +23,24 @@ type (
 	EchoResponse struct {
 		Echo string `json:"echo"`
 	}
+	TestService struct {
+		ProcessFn func(_ context.Context, req *rpc.RequestParams) (any, error)
+	}
 )
+
+func NewTestService(ts *TestService) *rpc.Service {
+	s := rpc.NewService("TestService")
+	s.RegisterMethod("Exec", ts.Exec)
+	return s
+}
+
+func (s TestService) MethodName() string {
+	return "TestService.Exec"
+}
+
+func (s TestService) Exec(ctx context.Context, req *rpc.RequestParams) (any, error) {
+	return s.ProcessFn(ctx, req)
+}
 
 func NewEchoService() *rpc.Service {
 	echo := EchoService{}
@@ -147,11 +164,11 @@ func TestRpcServer_EmptyMethodName(t *testing.T) {
 
 func TestRpcServer_ValidRequestParams(t *testing.T) {
 	server := rpc.NewServer()
-	ts := &rpc.TestService{}
+	ts := &TestService{}
 	ts.ProcessFn = func(_ context.Context, req *rpc.RequestParams) (any, error) {
 		return "ok", nil
 	}
-	server.AddService(rpc.NewTestService(ts))
+	server.AddService(NewTestService(ts))
 	cases := []struct {
 		name  string
 		param any
@@ -175,12 +192,12 @@ func TestRpcServer_ValidRequestParams(t *testing.T) {
 func TestRpcServer_ExecutionTimeout(t *testing.T) {
 	server := rpc.NewServer()
 	server.ExecutionTimeout = time.Second
-	ts := &rpc.TestService{}
+	ts := &TestService{}
 	ts.ProcessFn = func(_ context.Context, req *rpc.RequestParams) (any, error) {
 		time.Sleep(server.ExecutionTimeout + (2 * time.Second))
 		return "ok", nil
 	}
-	server.AddService(rpc.NewTestService(ts))
+	server.AddService(NewTestService(ts))
 	rec := httptest.NewRecorder()
 	req := requestObj(t, ts.MethodName(), nil)
 	server.ServeHTTP(rec, req)
@@ -192,7 +209,7 @@ func TestRpcServer_ExecutionTimeout(t *testing.T) {
 func TestRpcServer_ExecuteMultipleRequests(t *testing.T) {
 	server := rpc.NewServer()
 	server.ExecutionTimeout = time.Second
-	ts := &rpc.TestService{}
+	ts := &TestService{}
 	ts.ProcessFn = func(_ context.Context, req *rpc.RequestParams) (any, error) {
 		var s string
 		_ = json.Unmarshal(req.Payload, &s)
@@ -206,7 +223,7 @@ func TestRpcServer_ExecuteMultipleRequests(t *testing.T) {
 			return "ok - " + s, nil
 		}
 	}
-	server.AddService(rpc.NewTestService(ts))
+	server.AddService(NewTestService(ts))
 	rec := httptest.NewRecorder()
 
 	reqObj := []map[string]any{
