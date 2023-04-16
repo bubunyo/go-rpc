@@ -1,7 +1,7 @@
 # go-rpc
 
 [![Build Status](https://github.com/bubunyo/go-rpc/workflows/test-unit/badge.svg)](https://github.com/bubunyo/go-rpc/actions?query=branch%3Amaster+workflow%3Atest-unit)
-[![GoDoc](https://godoc.org/github.com/bubunyo/go-rpc?status.svg)][godoc]
+[![GoDoc](https://godoc.org/github.com/bubunyo/go-rpc?status.svg)]
 [![Coverage Status](https://codecov.io/gh/bubunyo/go-rpc/branch/master/graph/badge.svg)](https://codecov.io/gh/bubunyo/go-rpc)
 [![GoDevDoc](https://img.shields.io/badge/dev-doc-00ADD8?logo=go)](https://pkg.go.dev/github.com/bubunyo/go-rpc)
 ![Code lines](https://sloc.xyz/github/bubunyo/go-rpc/?category=code)
@@ -17,7 +17,7 @@ the [JSON RPC Spec](https://www.jsonrpc.org/specification)
 
 ## Example Usage
 
-```
+```go
 // 1. Create you service
 type EchoService struct{}
 
