@@ -1,0 +1,25 @@
+name: test-unit
+on:
+  push:
+    branches:
+      - master
+      - main
+  pull_request:
+jobs:
+  test:
+    strategy:
+      matrix:
+        go-version: [ 1.19.x ]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Go
+        uses: actions/setup-go@v2
+        with:
+          go-version: ${{ matrix.go-version }}
+      - name: Checkout code
+        uses: actions/checkout@v2
+      - name: Run tests
+        run: go test ./...
+      - name: Clean test cache
+        run: go clean -testcache
+
