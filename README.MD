@@ -9,7 +9,7 @@ the [JSON RPC Spec](https://www.jsonrpc.org/specification)
 ## Features
 
 1. Bootstrap your json RPC Server with ease.
-2. Handle multiple request concurrently with ease.
+2. Handle multiple request concurrently.
 3. Add your own custom error
 
 ## Example Usage
