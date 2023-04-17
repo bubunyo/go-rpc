@@ -53,7 +53,7 @@ curl -X POST  localhost:8080/rpc \
         "params": null
 }'
 ```
-with the following outpur
+with the following output
 ```shell
 {
 	"jsonrpc": "2.0",
