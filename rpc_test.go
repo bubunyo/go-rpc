@@ -31,6 +31,7 @@ type (
 func (s EchoService) Register() (string, rpc.RequestMap) {
 	return "EchoService", map[string]rpc.RequestFunc{
 		"Ping": s.Ping,
+		"Url":  s.Url,
 	}
 }
 
@@ -57,6 +58,12 @@ func (s EchoService) Ping(_ context.Context, req *rpc.RequestParams) (any, error
 	_ = json.Unmarshal(req.Payload, &er)
 	return EchoResponse{
 		Echo: "echo " + er.Echo,
+	}, nil
+}
+
+func (s EchoService) Url(_ context.Context, req *rpc.RequestParams) (any, error) {
+	return EchoResponse{
+		Echo: "http://example.com?this=1&that=2",
 	}, nil
 }
 
@@ -111,6 +118,16 @@ func TestRpcServerResponses(t *testing.T) {
 	server.ServeHTTP(rec, req)
 	result := successResponse(t, rec.Result()).(map[string]any)
 	assert.Equal(t, "echo ping", result["echo"])
+}
+
+func TestRpcServerResponsesWithSpecialChars(t *testing.T) {
+	server := rpc.NewDefaultServer()
+	server.AddService(NewEchoService())
+	req := requestObj(t, "EchoService.Url", map[string]any{})
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+	result := successResponse(t, rec.Result()).(map[string]any)
+	assert.Equal(t, "http://example.com?this=1&that=2", result["echo"])
 }
 
 func TestRpcServer_ErrorResponses(t *testing.T) {

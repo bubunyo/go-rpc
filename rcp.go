@@ -108,7 +108,9 @@ func successResponse(req Request, body any) Response {
 
 func writeResponse(w http.ResponseWriter, response any) {
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(response)
+	enc := json.NewEncoder(w)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(response)
 }
 
 func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
