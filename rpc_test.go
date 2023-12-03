@@ -28,10 +28,16 @@ type (
 	}
 )
 
-func NewTestService(ts *TestService) *rpc.Service {
-	s := rpc.NewService("TestService")
-	s.RegisterMethod("Exec", ts.Exec)
-	return s
+func (s EchoService) Register() (string, rpc.RequestMap) {
+	return "EchoService", map[string]rpc.RequestFunc{
+		"Ping": s.Ping,
+	}
+}
+
+func (ts TestService) Register() (string, rpc.RequestMap) {
+	return "TestService", map[string]rpc.RequestFunc{
+		"Exec": ts.Exec,
+	}
 }
 
 func (s TestService) MethodName() string {
@@ -42,11 +48,8 @@ func (s TestService) Exec(ctx context.Context, req *rpc.RequestParams) (any, err
 	return s.ProcessFn(ctx, req)
 }
 
-func NewEchoService() *rpc.Service {
-	echo := EchoService{}
-	echoService := rpc.NewService("EchoService")
-	echoService.RegisterMethod("Ping", echo.Ping)
-	return echoService
+func NewEchoService() rpc.ServiceRegistrar {
+	return EchoService{}
 }
 
 func (s EchoService) Ping(_ context.Context, req *rpc.RequestParams) (any, error) {
@@ -99,7 +102,7 @@ func errorResponse(t *testing.T, resp *http.Response) (int, string) {
 }
 
 func TestRpcServerResponses(t *testing.T) {
-	server := rpc.NewServer()
+	server := rpc.NewDefaultServer()
 	server.AddService(NewEchoService())
 	req := requestObj(t, "EchoService.Ping", map[string]any{
 		"echo": "ping",
@@ -111,7 +114,7 @@ func TestRpcServerResponses(t *testing.T) {
 }
 
 func TestRpcServer_ErrorResponses(t *testing.T) {
-	server := rpc.NewServer()
+	server := rpc.NewDefaultServer()
 	server.AddService(NewEchoService())
 	req := requestObj(t, "EchoService.NonMethod", map[string]any{
 		"echo": "ping",
@@ -124,7 +127,7 @@ func TestRpcServer_ErrorResponses(t *testing.T) {
 }
 
 func TestRpcServer_InvalidJsonRpcVersion(t *testing.T) {
-	server := rpc.NewServer()
+	server := rpc.NewDefaultServer()
 	server.AddService(NewEchoService())
 	reqObj := map[string]any{
 		"jsonrpc": "1.0",
@@ -146,7 +149,7 @@ func TestRpcServer_InvalidJsonRpcVersion(t *testing.T) {
 }
 
 func TestRpcServer_EmptyMethodName(t *testing.T) {
-	server := rpc.NewServer()
+	server := rpc.NewDefaultServer()
 	server.AddService(NewEchoService())
 	cases := []string{" ", "", "\n\n", "\t\n"}
 	for _, m := range cases {
@@ -163,12 +166,12 @@ func TestRpcServer_EmptyMethodName(t *testing.T) {
 }
 
 func TestRpcServer_ValidRequestParams(t *testing.T) {
-	server := rpc.NewServer()
+	server := rpc.NewDefaultServer()
 	ts := &TestService{}
 	ts.ProcessFn = func(_ context.Context, req *rpc.RequestParams) (any, error) {
 		return "ok", nil
 	}
-	server.AddService(NewTestService(ts))
+	server.AddService(ts)
 	cases := []struct {
 		name  string
 		param any
@@ -190,14 +193,17 @@ func TestRpcServer_ValidRequestParams(t *testing.T) {
 }
 
 func TestRpcServer_ExecutionTimeout(t *testing.T) {
-	server := rpc.NewServer()
-	server.ExecutionTimeout = time.Second
+	opts := rpc.Opts{
+		ExecutionTimeout: time.Second,
+		MaxBytesRead:     rpc.MaxBytesRead,
+	}
+	server := rpc.NewServer(opts)
 	ts := &TestService{}
 	ts.ProcessFn = func(_ context.Context, req *rpc.RequestParams) (any, error) {
-		time.Sleep(server.ExecutionTimeout + (2 * time.Second))
+		time.Sleep(opts.ExecutionTimeout + (2 * time.Second))
 		return "ok", nil
 	}
-	server.AddService(NewTestService(ts))
+	server.AddService(ts)
 	rec := httptest.NewRecorder()
 	req := requestObj(t, ts.MethodName(), nil)
 	server.ServeHTTP(rec, req)
@@ -207,15 +213,18 @@ func TestRpcServer_ExecutionTimeout(t *testing.T) {
 }
 
 func TestRpcServer_ExecuteMultipleRequests(t *testing.T) {
-	server := rpc.NewServer()
-	server.ExecutionTimeout = time.Second
+	opts := rpc.Opts{
+		ExecutionTimeout: time.Second,
+		MaxBytesRead:     rpc.MaxBytesRead,
+	}
+	server := rpc.NewServer(opts)
 	ts := &TestService{}
 	ts.ProcessFn = func(_ context.Context, req *rpc.RequestParams) (any, error) {
 		var s string
 		_ = json.Unmarshal(req.Payload, &s)
 		switch s {
 		case "wait":
-			time.Sleep(server.ExecutionTimeout + (2 * time.Second))
+			time.Sleep(opts.ExecutionTimeout + (2 * time.Second))
 			return "ok - " + s, nil
 		case "error":
 			return nil, errors.New("static error")
@@ -223,7 +232,7 @@ func TestRpcServer_ExecuteMultipleRequests(t *testing.T) {
 			return "ok - " + s, nil
 		}
 	}
-	server.AddService(NewTestService(ts))
+	server.AddService(ts)
 	rec := httptest.NewRecorder()
 
 	reqObj := []map[string]any{
