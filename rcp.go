@@ -13,29 +13,47 @@ import (
 )
 
 const (
-	Version      = "2.0"   // JSON RPC Version
-	MaxBytesRead = 1 << 20 // 1mb
+	Version          = "2.0"            // JSON RPC Version
+	MaxBytesRead     = 1 << 20          // 1mb
+	ExecutionTimeout = 15 * time.Second // execution timout
 )
 
 var (
-	defaultReq = Request{JsonRpc: Version}
+	defaultReq  = Request{JsonRpc: Version}
+	DefaultOpts = Opts{
+		MaxBytesRead:     MaxBytesRead,
+		ExecutionTimeout: ExecutionTimeout,
+	}
 )
 
 // NewServer creates a new JSON RPC Server that can handle requests.
-func NewServer() *Service {
-	return NewService("")
+func NewServer(opts Opts) *Service {
+	return NewService(opts)
+}
+
+// NewServer creates a new JSON RPC Server that can handle requests.
+func NewDefaultServer() *Service {
+	return NewService(DefaultOpts)
 }
 
 type (
-	Service struct {
-		name      string
-		methodMap map[string]func(context.Context, *RequestParams) (any, error)
+	Opts struct {
+		// MaxBytesRead is the maximum bytes a request object can contain
+		MaxBytesRead int64
 		// ExecutionTimeout is the maximum time a method should execute for. If the
 		// execution exceeds the timeout, and ExectutionTimeout Error is returned for
 		// that request
 		ExecutionTimeout time.Duration
-		// MaxBytesRead is the maximum bytes a request object can contain
-		MaxBytesRead int64
+	}
+	Service struct {
+		methodMap        map[string]func(context.Context, *RequestParams) (any, error)
+		executionTimeout time.Duration
+		maxBytesRead     int64
+	}
+	RequestFunc      = func(context.Context, *RequestParams) (any, error)
+	RequestMap       = map[string]RequestFunc
+	ServiceRegistrar interface {
+		Register() (string, RequestMap)
 	}
 	Request struct {
 		JsonRpc string `json:"jsonrpc"` // must always be 2.0
@@ -103,7 +121,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeResponse(w, errorResponse(&defaultReq, RequestBodyIsEmpty))
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, s.MaxBytesRead)
+	r.Body = http.MaxBytesReader(w, r.Body, s.maxBytesRead)
 	buf := bytes.NewBuffer([]byte{})
 	n, err := io.Copy(buf, r.Body)
 	if err != nil {
@@ -191,7 +209,7 @@ func (s *Service) handleMethod(req Request) (any, error) {
 		res.resp, res.err = fn(ctx, params)
 		result <- res
 	}()
-	delay := time.NewTimer(s.ExecutionTimeout)
+	delay := time.NewTimer(s.executionTimeout)
 	select {
 	case <-delay.C:
 		return nil, ExecutionTimeoutError
@@ -203,27 +221,23 @@ func (s *Service) handleMethod(req Request) (any, error) {
 	}
 }
 
-func (s Service) AddService(services ...*Service) {
-	prefix := ""
-	if s.name != "" {
-		prefix = s.name + "."
-	}
+func (s Service) AddService(services ...ServiceRegistrar) {
 	for _, srv := range services {
-		for methodName, fn := range srv.methodMap {
-			s.methodMap[prefix+srv.name+"."+methodName] = fn
+		name, requestMap := srv.Register()
+		nameFmt := "%s"
+		if name != "" {
+			nameFmt = "%s.%s"
+		}
+		for methodName, fn := range requestMap {
+			s.methodMap[fmt.Sprintf(nameFmt, name, methodName)] = fn
 		}
 	}
 }
 
-func NewService(name string) *Service {
+func NewService(opts Opts) *Service {
 	return &Service{
-		name:             name,
 		methodMap:        map[string]func(context.Context, *RequestParams) (any, error){},
-		ExecutionTimeout: 15 * time.Second,
-		MaxBytesRead:     MaxBytesRead,
+		executionTimeout: opts.ExecutionTimeout,
+		maxBytesRead:     opts.MaxBytesRead,
 	}
-}
-
-func (s *Service) RegisterMethod(methodName string, fn func(context.Context, *RequestParams) (any, error)) {
-	s.methodMap[methodName] = fn
 }
