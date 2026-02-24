@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -31,7 +32,7 @@ func NewServer(opts Opts) *Service {
 	return NewService(opts)
 }
 
-// NewServer creates a new JSON RPC Server that can handle requests.
+// NewDefaultServer creates a new JSON RPC Server using the default options.
 func NewDefaultServer() *Service {
 	return NewService(DefaultOpts)
 }
@@ -76,6 +77,11 @@ type (
 	}
 )
 
+// Bind unmarshals the request payload into the value pointed to by v.
+func (p *RequestParams) Bind(v any) error {
+	return json.Unmarshal(p.Payload, v)
+}
+
 func errorResponse(req *Request, err error) Response {
 	res := Response{
 		JsonRpc: req.JsonRpc,
@@ -107,6 +113,7 @@ func successResponse(req Request, body any) Response {
 }
 
 func writeResponse(w http.ResponseWriter, response any) {
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
@@ -125,9 +132,10 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, s.maxBytesRead)
 	buf := bytes.NewBuffer([]byte{})
-	n, err := io.Copy(buf, r.Body)
+	_, err := io.Copy(buf, r.Body)
 	if err != nil {
-		if n > MaxBytesRead {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
 			writeResponse(w, errorResponse(&defaultReq, RequestBodyTooLargeError))
 			return
 		}
@@ -151,14 +159,19 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		for i, payload := range payloads {
 			go func(index int, p any) {
 				defer wg.Done()
-				resp[index] = s.handle(parseRequest(p.(map[string]any)))
+				m, ok := p.(map[string]any)
+				if !ok {
+					resp[index] = errorResponse(&defaultReq, InvalidRequest)
+					return
+				}
+				resp[index] = s.handle(r.Context(), parseRequest(m))
 			}(i, payload)
 		}
 		wg.Wait()
 		writeResponse(w, resp)
 	case map[string]any:
 		payload := reqPayload.(map[string]any)
-		writeResponse(w, s.handle(parseRequest(payload)))
+		writeResponse(w, s.handle(r.Context(), parseRequest(payload)))
 	default:
 		writeResponse(w, errorResponse(&defaultReq, InvalidRequest))
 	}
@@ -174,26 +187,28 @@ func parseRequest(payload map[string]any) Request {
 		}
 	}
 	req.Id = payload["id"]
-	req.Method = payload["method"].(string)
+	if m, ok := payload["method"].(string); ok {
+		req.Method = m
+	}
 	req.Params = payload["params"]
 	return req
 }
 
-func (s *Service) handle(req Request) Response {
+func (s *Service) handle(ctx context.Context, req Request) Response {
 	if req.JsonRpc != Version {
 		return errorResponse(&req, InvalidRpcVersion)
 	}
 	if strings.TrimSpace(req.Method) == "" {
 		return errorResponse(&req, InvalidMethodParam)
 	}
-	res, err := s.handleMethod(req)
+	res, err := s.handleMethod(ctx, req)
 	if err != nil {
 		return errorResponse(&req, err)
 	}
 	return successResponse(req, res)
 }
 
-func (s *Service) handleMethod(req Request) (any, error) {
+func (s *Service) handleMethod(ctx context.Context, req Request) (any, error) {
 	fn, ok := s.methodMap[req.Method]
 	if !ok {
 		return nil, MethodNotFound
@@ -202,9 +217,9 @@ func (s *Service) handleMethod(req Request) (any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s", InvalidRequest, err.Error())
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	result := make(chan methodResp)
+	result := make(chan methodResp, 1)
 	go func() {
 		params := &RequestParams{Payload: payload}
 		res := methodResp{}
@@ -223,7 +238,7 @@ func (s *Service) handleMethod(req Request) (any, error) {
 	}
 }
 
-func (s Service) AddService(services ...ServiceRegistrar) {
+func (s *Service) AddService(services ...ServiceRegistrar) {
 	for _, srv := range services {
 		name, requestMap := srv.Register()
 		nameFmt := "%s"

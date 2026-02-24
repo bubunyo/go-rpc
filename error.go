@@ -7,7 +7,7 @@ var (
 	InvalidRequest           = NewError(-32600, "The JSON sent is not a valid Request object")
 	MethodNotFound           = NewError(-32601, "The method does not exist / is not available")
 	InvalidMethodParam       = NewError(-32602, "Invalid method parameter(s)")
-	InternalError            = NewError(-32602, "Internal JSON-RPC error")
+	InternalError            = NewError(-32603, "Internal JSON-RPC error")
 	ExecutionTimeoutError    = NewError(-32001, "Execution Timeout")
 	RequestBodyIsEmpty       = NewError(-32002, "Request body is empty")
 	RequestBodyTooLargeError = NewError(-32003, "Request body too large")
