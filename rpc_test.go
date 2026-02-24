@@ -209,6 +209,77 @@ func TestRpcServer_ValidRequestParams(t *testing.T) {
 	}
 }
 
+func TestRequestParams_Bind(t *testing.T) {
+	server := rpc.NewDefaultServer()
+	ts := &TestService{}
+	ts.ProcessFn = func(_ context.Context, req *rpc.RequestParams) (any, error) {
+		var s string
+		err := req.Bind(&s)
+		require.NoError(t, err)
+		return s, nil
+	}
+	server.AddService(ts)
+	rec := httptest.NewRecorder()
+	req := requestObj(t, ts.MethodName(), "hello")
+	server.ServeHTTP(rec, req)
+	resp := successResponse(t, rec.Result())
+	assert.Equal(t, "hello", resp)
+}
+
+func TestRpcServer_MissingMethodField(t *testing.T) {
+	server := rpc.NewDefaultServer()
+	server.AddService(NewEchoService())
+	reqObj := map[string]any{
+		"jsonrpc": rpc.Version,
+		"id":      "test",
+		"params":  nil,
+		// "method" key intentionally omitted
+	}
+	payload, err := json.Marshal(reqObj)
+	require.NoError(t, err)
+	req, err := http.NewRequest(http.MethodPost, "", bytes.NewReader(payload))
+	require.NoError(t, err)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+	code, _ := errorResponse(t, rec.Result())
+	assert.Equal(t, rpc.InvalidMethodParam.Code, code)
+}
+
+func TestRpcServer_BatchWithNonObjectItem(t *testing.T) {
+	server := rpc.NewDefaultServer()
+	server.AddService(NewEchoService())
+	// Mix a valid request with a non-object element (a string)
+	reqObj := []any{
+		map[string]any{
+			"jsonrpc": rpc.Version,
+			"method":  "EchoService.Ping",
+			"params":  map[string]any{"echo": "hi"},
+			"id":      "good",
+		},
+		"not-an-object",
+	}
+	payload, err := json.Marshal(reqObj)
+	require.NoError(t, err)
+	req, err := http.NewRequest(http.MethodPost, "", bytes.NewReader(payload))
+	require.NoError(t, err)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Result().StatusCode)
+	var res []map[string]any
+	err = json.NewDecoder(rec.Result().Body).Decode(&res)
+	require.NoError(t, err)
+	require.Len(t, res, 2)
+	for _, e := range res {
+		switch e["id"] {
+		case "good":
+			assert.Equal(t, "echo hi", e["result"].(map[string]any)["echo"])
+		default:
+			er := e["error"].(map[string]any)
+			assert.Equal(t, float64(rpc.InvalidRequest.Code), er["code"])
+		}
+	}
+}
+
 func TestRpcServer_ExecutionTimeout(t *testing.T) {
 	opts := rpc.Opts{
 		ExecutionTimeout: time.Second,
@@ -294,7 +365,7 @@ func TestRpcServer_ExecuteMultipleRequests(t *testing.T) {
 			assert.Equal(t, "ok - random", e["result"])
 		case "test-2":
 			er := e["error"].(map[string]any)
-			assert.Equal(t, float64(-32602), er["code"])
+			assert.Equal(t, float64(-32603), er["code"])
 			assert.Equal(t, "static error", er["message"])
 		case "test-3":
 			er := e["error"].(map[string]any)
