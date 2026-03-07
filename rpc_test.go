@@ -7,8 +7,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"os/exec"
 	"strings"
 	"sync"
 	"testing"
@@ -432,14 +430,10 @@ func TestRpcServer_EmptyBody(t *testing.T) {
 	assert.Equal(t, rpc.ParseError.Code, code)
 }
 
-// TestRpcServer_BodyTooLarge documents a two-part bug in body-size enforcement:
-//
-//  1. The size check uses the hardcoded MaxBytesRead constant instead of the
-//     per-instance configured limit, so the configured limit is not enforced.
-//  2. When the limit IS exceeded, the response is a plain-text http.Error
-//     instead of a JSON RequestBodyTooLargeError response.
-//
-// BUG: when fixed, the response should be valid JSON with RequestBodyTooLargeError.Code.
+// TestRpcServer_BodyTooLarge verifies that a body exceeding the configured
+// per-instance limit returns a JSON RequestBodyTooLargeError response (not
+// plain text) and that the configured limit — not the hardcoded MaxBytesRead
+// constant — is what is enforced.
 func TestRpcServer_BodyTooLarge(t *testing.T) {
 	const limit = 64
 	server := rpc.NewServer(rpc.Opts{
@@ -447,22 +441,16 @@ func TestRpcServer_BodyTooLarge(t *testing.T) {
 		ExecutionTimeout: rpc.DefaultOpts.ExecutionTimeout,
 	})
 	server.AddService(NewEchoService())
-	// Build a payload larger than both the configured limit and the default limit
-	// (1 MB) to exercise the MaxBytesReader error path regardless of which limit
-	// is used. Once the bug is fixed, use a body slightly larger than `limit`.
-	body := strings.Repeat("x", (1<<20)+1)
+	body := strings.Repeat("x", limit+1)
 	req, err := http.NewRequest(http.MethodPost, "", strings.NewReader(body))
 	require.NoError(t, err)
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
-	// Current (buggy) behaviour: plain-text response, not JSON.
-	rawBody := rec.Body.String()
 	var r map[string]any
-	jsonErr := json.Unmarshal([]byte(strings.TrimSpace(rawBody)), &r)
-	assert.Error(t, jsonErr, "BUG: body-too-large response is plain text, not JSON")
-	// When fixed, replace the two lines above with:
-	//   require.NoError(t, json.NewDecoder(rec.Result().Body).Decode(&r))
-	//   assert.Equal(t, float64(rpc.RequestBodyTooLargeError.Code), r["error"].(map[string]any)["code"])
+	require.NoError(t, json.NewDecoder(rec.Result().Body).Decode(&r), "response body must be JSON")
+	e, ok := r["error"].(map[string]any)
+	require.True(t, ok, "response must contain an error object")
+	assert.Equal(t, float64(rpc.RequestBodyTooLargeError.Code), e["code"])
 }
 
 // TestRpcServer_InvalidJSON verifies that a malformed JSON body returns a
@@ -481,83 +469,76 @@ func TestRpcServer_InvalidJSON(t *testing.T) {
 // Panic-safety: malformed inputs that previously crashed the server
 // ---------------------------------------------------------------------------
 
-// TestRpcServer_MissingMethodKey documents that a request object without a
-// "method" key currently causes a panic (interface conversion on nil).
-// BUG: parseRequest should use the ok-idiom and return an error response instead.
-// When fixed: replace assert.Panics with assert.NotPanics and check the error code.
+// TestRpcServer_MissingMethodKey verifies that a request object without a
+// "method" key is handled gracefully and returns an error (not a panic).
 func TestRpcServer_MissingMethodKey(t *testing.T) {
 	server := rpc.NewDefaultServer()
 	body := `{"jsonrpc":"2.0","id":1,"params":null}`
 	req, err := http.NewRequest(http.MethodPost, "", strings.NewReader(body))
 	require.NoError(t, err)
 	rec := httptest.NewRecorder()
-	// Currently panics — document the broken behaviour so it is tracked.
-	assert.Panics(t, func() {
+	assert.NotPanics(t, func() {
 		server.ServeHTTP(rec, req)
-	}, "BUG: missing 'method' key causes a panic; should return an error response")
+	})
+	assert.Equal(t, http.StatusOK, rec.Result().StatusCode)
+	code, _ := errorResponse(t, rec.Result())
+	assert.NotZero(t, code)
 }
 
-// TestRpcServer_NonStringMethodValue documents that a request where "method" is
-// not a string currently causes a panic (interface conversion: float64 → string).
-// BUG: parseRequest should use the ok-idiom and return an error response instead.
-// When fixed: replace assert.Panics with assert.NotPanics and check the error code.
+// TestRpcServer_NonStringMethodValue verifies that a request where "method" is
+// not a string is handled gracefully and returns an error (not a panic).
 func TestRpcServer_NonStringMethodValue(t *testing.T) {
 	server := rpc.NewDefaultServer()
 	body := `{"jsonrpc":"2.0","id":1,"method":42,"params":null}`
 	req, err := http.NewRequest(http.MethodPost, "", strings.NewReader(body))
 	require.NoError(t, err)
 	rec := httptest.NewRecorder()
-	// Currently panics — document the broken behaviour so it is tracked.
-	assert.Panics(t, func() {
+	assert.NotPanics(t, func() {
 		server.ServeHTTP(rec, req)
-	}, "BUG: non-string 'method' value causes a panic; should return an error response")
+	})
+	assert.Equal(t, http.StatusOK, rec.Result().StatusCode)
+	code, _ := errorResponse(t, rec.Result())
+	assert.NotZero(t, code)
 }
 
-// TestRpcServer_BatchWithNonObjectElement_Panics documents that a batch array
-// containing non-object elements currently causes an unrecoverable panic inside
-// a goroutine spawned by ServeHTTP, which crashes the process.
-//
-// BUG (rpc.go:154): p.(map[string]any) has no ok-idiom guard. The fix is to
-// check the type assertion and return an InvalidRequest error for each bad element.
-//
-// Because the panic originates inside a goroutine, assert.Panics cannot catch it.
-// The test is run as a subprocess via os/exec so the crash is isolated.
-// Once the bug is fixed, this test should be replaced with a table-driven test
-// using assert.NotPanics that checks each response contains an error object.
-func TestRpcServer_BatchWithNonObjectElement_Panics(t *testing.T) {
-	// Subprocess execution: when the env var is set, run the crashing code directly.
-	if os.Getenv("RPC_TEST_BATCH_PANIC") == "1" {
-		server := rpc.NewDefaultServer()
-		body := os.Getenv("RPC_TEST_BATCH_BODY")
-		req, _ := http.NewRequest(http.MethodPost, "", strings.NewReader(body))
-		rec := httptest.NewRecorder()
-		server.ServeHTTP(rec, req)
-		return
-	}
-
+// TestRpcServer_BatchWithNonObjectElement verifies that a batch array containing
+// non-object elements (numbers, strings, null) is handled gracefully: each bad
+// element returns an error in the response array, valid elements still succeed,
+// and the server does not panic or crash.
+func TestRpcServer_BatchWithNonObjectElement(t *testing.T) {
+	server := rpc.NewDefaultServer()
+	server.AddService(NewEchoService())
 	cases := []struct {
-		name string
-		body string
+		name         string
+		body         string
+		wantErrCount int // expected number of error responses in the batch
 	}{
-		{"number_elements", `[1, 2, 3]`},
-		{"string_elements", `["a", "b"]`},
-		{"null_element", `[null]`},
-		{"mixed", `[{"jsonrpc":"2.0","method":"EchoService.Ping","id":1}, "bad"]`},
+		{"number_elements", `[1, 2, 3]`, 3},
+		{"string_elements", `["a", "b"]`, 2},
+		{"null_element", `[null]`, 1},
+		// One valid object + one invalid string → 1 success + 1 error
+		{"mixed", `[{"jsonrpc":"2.0","method":"EchoService.Ping","id":1}, "bad"]`, 1},
 	}
-
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			cmd := exec.Command(os.Args[0], "-test.run=TestRpcServer_BatchWithNonObjectElement_Panics")
-			cmd.Env = append(os.Environ(),
-				"RPC_TEST_BATCH_PANIC=1",
-				"RPC_TEST_BATCH_BODY="+tc.body,
-			)
-			err := cmd.Run()
-			// A non-zero exit from the subprocess confirms the goroutine panic
-			// crashed the process. Document this as the expected (buggy) outcome.
-			assert.Error(t, err,
-				"BUG: batch with non-object elements should return error responses, not crash the process")
+			req, err := http.NewRequest(http.MethodPost, "", strings.NewReader(tc.body))
+			require.NoError(t, err)
+			rec := httptest.NewRecorder()
+			assert.NotPanics(t, func() {
+				server.ServeHTTP(rec, req)
+			})
+			assert.Equal(t, http.StatusOK, rec.Result().StatusCode)
+			var responses []map[string]any
+			require.NoError(t, json.NewDecoder(rec.Result().Body).Decode(&responses))
+			errCount := 0
+			for _, r := range responses {
+				if _, hasErr := r["error"]; hasErr {
+					errCount++
+				}
+			}
+			assert.Equal(t, tc.wantErrCount, errCount,
+				"expected %d error responses for body %q", tc.wantErrCount, tc.body)
 		})
 	}
 }
@@ -667,24 +648,16 @@ func TestRpcServer_AddService_ConcurrentServeHTTP(t *testing.T) {
 // Error sentinel codes
 // ---------------------------------------------------------------------------
 
-// TestError_InternalErrorCode documents the current (buggy) state where
-// InternalError and InvalidMethodParam share code -32602. The spec requires
-// InternalError to use -32603. This test will need updating once the bug is
-// fixed.
+// TestError_InternalErrorCode verifies that InternalError uses code -32603
+// (JSON-RPC 2.0 spec "Internal error") and is distinct from InvalidMethodParam
+// which uses -32602 ("Invalid params").
 func TestError_InternalErrorCode(t *testing.T) {
-	// Both currently share -32602; document this so the discrepancy is visible.
-	assert.Equal(t, rpc.InvalidMethodParam.Code, rpc.InternalError.Code,
-		"InternalError and InvalidMethodParam share code -32602 (bug: InternalError should be -32603)")
+	assert.Equal(t, -32603, rpc.InternalError.Code)
+	assert.NotEqual(t, rpc.InvalidMethodParam.Code, rpc.InternalError.Code)
 }
 
-// TestError_DistinctSentinelCodes checks for duplicate error codes across all
-// sentinel errors and logs each collision.
-// BUG: InternalError and InvalidMethodParam both use code -32602.
-//   - InvalidMethodParam should keep -32602 ("Invalid params" per JSON-RPC 2.0 spec).
-//   - InternalError should use -32603 ("Internal error" per JSON-RPC 2.0 spec).
-//
-// The duplicate is currently expected; update this test when the bug is fixed by
-// removing the t.Skip and letting t.Errorf fail the test.
+// TestError_DistinctSentinelCodes verifies that every sentinel error has a
+// unique code.
 func TestError_DistinctSentinelCodes(t *testing.T) {
 	sentinels := map[string]rpc.Error{
 		"ParseError":               rpc.ParseError,
@@ -698,22 +671,11 @@ func TestError_DistinctSentinelCodes(t *testing.T) {
 		"InvalidRpcVersion":        rpc.InvalidRpcVersion,
 	}
 	seen := map[int]string{}
-	duplicates := []string{}
 	for name, e := range sentinels {
 		if prev, exists := seen[e.Code]; exists {
-			duplicates = append(duplicates,
-				strings.Join([]string{prev, name}, " and "))
-		} else {
-			seen[e.Code] = name
+			t.Errorf("duplicate error code %d: %s and %s share the same code", e.Code, prev, name)
 		}
-	}
-	if len(duplicates) > 0 {
-		// Known bug: InternalError and InvalidMethodParam share -32602.
-		// Change t.Logf → t.Errorf once the codes are corrected.
-		for _, d := range duplicates {
-			t.Logf("BUG: duplicate error code shared by: %s", d)
-		}
-		t.Skip("skipping: known duplicate sentinel codes (see BUG comments above)")
+		seen[e.Code] = name
 	}
 }
 
@@ -893,10 +855,8 @@ func TestRpcServer_HTMLEscapingDisabled(t *testing.T) {
 // Content-Type header
 // ---------------------------------------------------------------------------
 
-// TestRpcServer_ContentTypeHeader documents that the server currently does NOT
-// set a Content-Type header on responses.
-// BUG: writeResponse should set Content-Type: application/json before encoding.
-// When fixed: change the assertion to assert.Contains(t, ct, "application/json").
+// TestRpcServer_ContentTypeHeader verifies that all responses carry a
+// Content-Type of application/json.
 func TestRpcServer_ContentTypeHeader(t *testing.T) {
 	server := rpc.NewDefaultServer()
 	server.AddService(NewEchoService())
@@ -904,8 +864,5 @@ func TestRpcServer_ContentTypeHeader(t *testing.T) {
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 	ct := rec.Result().Header.Get("Content-Type")
-	// Current (buggy) behaviour: Go's ResponseRecorder auto-detects "text/plain"
-	// because no Content-Type is explicitly set before WriteHeader is called.
-	assert.NotContains(t, ct, "application/json",
-		"BUG: Content-Type is not set to application/json (currently: %q)", ct)
+	assert.Contains(t, ct, "application/json")
 }
