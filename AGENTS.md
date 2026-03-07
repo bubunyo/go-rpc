@@ -58,7 +58,7 @@ If golangci-lint is not installed locally, `go vet ./...` is the minimum require
 
 ```
 go-rpc/
-├── rcp.go               # Core library — NOTE: filename is a typo (should be rpc.go); do not rename
+├── rpc.go               # Core library
 ├── error.go             # Error type and sentinel errors
 ├── error_test.go        # White-box tests (package rpc)
 ├── rpc_test.go          # Black-box tests (package rpc_test)
@@ -94,8 +94,7 @@ go-rpc/
       "github.com/stretchr/testify/assert"
   )
   ```
-- The existing `error_test.go` lists third-party before stdlib — this is a known inconsistency;
-  new code should follow the stdlib-first convention.
+- All files must follow the stdlib-first convention. Fix any violations you encounter.
 - Use `goimports` or `gofmt` to auto-organise imports.
 
 ### Naming Conventions
@@ -139,7 +138,7 @@ go-rpc/
 ### Concurrency
 - Use `sync.WaitGroup` for fan-out over a bounded set of goroutines (batch requests).
 - Use a goroutine + channel + `time.NewTimer` + `select` for per-operation timeouts rather than
-  `context.WithTimeout`, matching the existing pattern in `rcp.go`.
+  `context.WithTimeout`, matching the existing pattern in `rpc.go`.
 - When adding concurrency, ensure goroutines cannot leak; always drain or close channels.
 
 ### HTTP / JSON
@@ -184,8 +183,7 @@ Both workflows run on **Go 1.19**. Ensure local Go version matches to avoid surp
 
 ## Notes for Agents
 
-- The main source file is named `rcp.go` (a historical typo for `rpc.go`). **Do not rename it**;
-  doing so would break existing references and git history unnecessarily.
+- The main source file is `rpc.go`.
 - `test_rpc_service.go` is intentionally nearly empty — it is a placeholder. Add shared test
   helpers there if needed rather than creating new files.
 - There is no `Makefile`; do not create one unless explicitly requested.
