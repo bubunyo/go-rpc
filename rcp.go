@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -48,6 +49,7 @@ type (
 	}
 	Service struct {
 		methodMap        map[string]func(context.Context, *RequestParams) (any, error)
+		methodMeta       map[string]MethodMeta
 		executionTimeout time.Duration
 		maxBytesRead     int64
 	}
@@ -55,6 +57,20 @@ type (
 	RequestMap       = map[string]RequestFunc
 	ServiceRegistrar interface {
 		Register() (string, RequestMap)
+	}
+	// MethodMeta holds AI-readable metadata describing a registered RPC method.
+	// It is returned by the built-in rpc.discover method.
+	MethodMeta struct {
+		Name        string `json:"name"`
+		Description string `json:"description,omitempty"`
+		Params      any    `json:"params,omitempty"`
+		Result      any    `json:"result,omitempty"`
+	}
+	// ServiceDescriptor is an optional interface that services can implement to
+	// provide machine-readable descriptions of their methods for AI agent discovery.
+	// Describe returns a map of unqualified method names to their MethodMeta.
+	ServiceDescriptor interface {
+		Describe() map[string]MethodMeta
 	}
 	Request struct {
 		JsonRpc string `json:"jsonrpc"` // must always be 2.0
@@ -245,16 +261,52 @@ func (s *Service) AddService(services ...ServiceRegistrar) {
 		if name != "" {
 			nameFmt = "%s.%s"
 		}
+		var descriptions map[string]MethodMeta
+		if descriptor, ok := srv.(ServiceDescriptor); ok {
+			descriptions = descriptor.Describe()
+		}
 		for methodName, fn := range requestMap {
-			s.methodMap[fmt.Sprintf(nameFmt, name, methodName)] = fn
+			fullName := fmt.Sprintf(nameFmt, name, methodName)
+			s.methodMap[fullName] = fn
+			meta := MethodMeta{Name: fullName}
+			if d, ok := descriptions[methodName]; ok {
+				meta.Description = d.Description
+				meta.Params = d.Params
+				meta.Result = d.Result
+			}
+			s.methodMeta[fullName] = meta
 		}
 	}
 }
 
 func NewService(opts Opts) *Service {
-	return &Service{
+	svc := &Service{
 		methodMap:        map[string]func(context.Context, *RequestParams) (any, error){},
+		methodMeta:       map[string]MethodMeta{},
 		executionTimeout: opts.ExecutionTimeout,
 		maxBytesRead:     opts.MaxBytesRead,
 	}
+	svc.methodMap["rpc.discover"] = svc.discover
+	return svc
+}
+
+// discover implements the built-in rpc.discover method. It returns a sorted
+// list of all registered methods with their AI-readable metadata, enabling AI
+// agents to enumerate and understand the available RPC API.
+func (s *Service) discover(_ context.Context, _ *RequestParams) (any, error) {
+	methods := make([]MethodMeta, 0, len(s.methodMap)-1)
+	for name := range s.methodMap {
+		if name == "rpc.discover" {
+			continue
+		}
+		meta, ok := s.methodMeta[name]
+		if !ok {
+			meta = MethodMeta{Name: name}
+		}
+		methods = append(methods, meta)
+	}
+	sort.Slice(methods, func(i, j int) bool {
+		return methods[i].Name < methods[j].Name
+	})
+	return methods, nil
 }

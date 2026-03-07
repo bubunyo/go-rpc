@@ -300,6 +300,107 @@ func TestRpcServer_ExecutionTimeout(t *testing.T) {
 	assert.Equal(t, rpc.ExecutionTimeoutError.Message, msg)
 }
 
+// DescribedEchoService is an EchoService that also implements ServiceDescriptor.
+type DescribedEchoService struct{ EchoService }
+
+func (s DescribedEchoService) Describe() map[string]rpc.MethodMeta {
+	return map[string]rpc.MethodMeta{
+		"Ping": {
+			Description: "Echoes the request payload back to the caller.",
+			Params:      map[string]any{"type": "object", "properties": map[string]any{"echo": map[string]any{"type": "string"}}},
+			Result:      map[string]any{"type": "object", "properties": map[string]any{"echo": map[string]any{"type": "string"}}},
+		},
+	}
+}
+
+func discoverResult(t *testing.T, server *rpc.Service) []map[string]any {
+	t.Helper()
+	req := requestObj(t, "rpc.discover", nil)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+	raw := successResponse(t, rec.Result())
+	items, ok := raw.([]any)
+	require.True(t, ok, "discover result should be a JSON array")
+	out := make([]map[string]any, len(items))
+	for i, item := range items {
+		out[i], ok = item.(map[string]any)
+		require.True(t, ok, "each discover item should be a JSON object")
+	}
+	return out
+}
+
+func TestRpcDiscover_EmptyServer(t *testing.T) {
+	server := rpc.NewDefaultServer()
+	methods := discoverResult(t, server)
+	assert.Empty(t, methods, "a fresh server with no services should return an empty list")
+}
+
+func TestRpcDiscover_ListsMethods(t *testing.T) {
+	server := rpc.NewDefaultServer()
+	server.AddService(NewEchoService())
+	methods := discoverResult(t, server)
+	require.Len(t, methods, 2) // EchoService.Ping and EchoService.Url
+
+	names := make([]string, len(methods))
+	for i, m := range methods {
+		names[i] = m["name"].(string)
+	}
+	// Result must be sorted
+	assert.Equal(t, []string{"EchoService.Ping", "EchoService.Url"}, names)
+}
+
+func TestRpcDiscover_ExcludesSelf(t *testing.T) {
+	server := rpc.NewDefaultServer()
+	server.AddService(NewEchoService())
+	methods := discoverResult(t, server)
+	for _, m := range methods {
+		assert.NotEqual(t, "rpc.discover", m["name"], "rpc.discover must not list itself")
+	}
+}
+
+func TestRpcDiscover_WithDescriptions(t *testing.T) {
+	server := rpc.NewDefaultServer()
+	server.AddService(DescribedEchoService{})
+	methods := discoverResult(t, server)
+	require.Len(t, methods, 2)
+
+	byName := make(map[string]map[string]any, len(methods))
+	for _, m := range methods {
+		byName[m["name"].(string)] = m
+	}
+
+	ping, ok := byName["EchoService.Ping"]
+	require.True(t, ok)
+	assert.Equal(t, "Echoes the request payload back to the caller.", ping["description"])
+	assert.NotNil(t, ping["params"])
+	assert.NotNil(t, ping["result"])
+
+	// Url has no description – fields must be absent (omitempty)
+	url, ok := byName["EchoService.Url"]
+	require.True(t, ok)
+	assert.NotContains(t, url, "description")
+	assert.NotContains(t, url, "params")
+	assert.NotContains(t, url, "result")
+}
+
+func TestRpcDiscover_MultipleServices(t *testing.T) {
+	server := rpc.NewDefaultServer()
+	server.AddService(NewEchoService())
+	ts := &TestService{}
+	ts.ProcessFn = func(_ context.Context, req *rpc.RequestParams) (any, error) {
+		return "ok", nil
+	}
+	server.AddService(ts)
+	methods := discoverResult(t, server)
+	// EchoService.Ping, EchoService.Url, TestService.Exec
+	require.Len(t, methods, 3)
+	names := make([]string, len(methods))
+	for i, m := range methods {
+		names[i] = m["name"].(string)
+	}
+	assert.Equal(t, []string{"EchoService.Ping", "EchoService.Url", "TestService.Exec"}, names)
+}
+
 func TestRpcServer_ExecuteMultipleRequests(t *testing.T) {
 	opts := rpc.Opts{
 		ExecutionTimeout: time.Second,
