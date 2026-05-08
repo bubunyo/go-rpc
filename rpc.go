@@ -20,7 +20,7 @@ const (
 )
 
 var (
-	defaultReq  = Request{JsonRpc: Version}
+	defaultReq  = Request[any]{JsonRpc: Version}
 	DefaultOpts = Opts{
 		MaxBytesRead:     MaxBytesRead,
 		ExecutionTimeout: ExecutionTimeout,
@@ -51,21 +51,20 @@ type (
 		executionTimeout time.Duration
 		maxBytesRead     int64
 	}
-	RequestFunc      = func(context.Context, *RequestParams) (any, error)
-	RequestMap       = map[string]RequestFunc
-	ServiceRegistrar interface {
-		Register() (string, RequestMap)
+	RequestFunc[R any] = func(context.Context, *RequestParams) (R, error)
+	ServiceRegistrar   interface {
+		Registry() *ServiceRegistry
 	}
-	Request struct {
+	Request[P any] struct {
 		JsonRpc string `json:"jsonrpc"` // must always be 2.0
 		Id      any    `json:"id"`      // should be a string, number or null.
 		Method  string `json:"method"`  // the method being called
-		Params  any    `json:"params"`  // the params for the method being called
+		Params  P      `json:"params"`  // the params for the method being called
 	}
-	Response struct {
+	Response[R any] struct {
 		JsonRpc string `json:"jsonrpc,omitempty"` // must always be 2.0
 		Id      any    `json:"id"`                // the id passed in the request object
-		Result  any    `json:"result,omitempty"`  // required when the request is successful
+		Result  R      `json:"result,omitempty"`  // required when the request is successful
 		Error   *Error `json:"error,omitempty"`   // required when the request is a failure
 	}
 	RequestParams struct {
@@ -82,30 +81,52 @@ func (p *RequestParams) Bind(v any) error {
 	return json.Unmarshal(p.Payload, v)
 }
 
-func errorResponse(req *Request, err error) Response {
-	res := Response{
+// ServiceRegistry holds the name and method handlers for a service.
+type ServiceRegistry struct {
+	name    string
+	methods map[string]func(context.Context, *RequestParams) (any, error)
+}
+
+// NewRegistry creates a ServiceRegistry with the given service name.
+func NewRegistry(name string) *ServiceRegistry {
+	return &ServiceRegistry{
+		name:    name,
+		methods: map[string]func(context.Context, *RequestParams) (any, error){},
+	}
+}
+
+// Handle registers a typed handler function under the given method name.
+// The coercion from RequestFunc[R] to func(...)(any,error) happens here,
+// inside the library, so callers never need an explicit wrapper.
+func Handle[R any](r *ServiceRegistry, name string, fn RequestFunc[R]) *ServiceRegistry {
+	r.methods[name] = func(ctx context.Context, p *RequestParams) (any, error) {
+		return fn(ctx, p)
+	}
+	return r
+}
+
+func errorResponse(req *Request[any], err error) Response[any] {
+	res := Response[any]{
 		JsonRpc: req.JsonRpc,
 		Id:      req.Id,
 		Error:   &Error{},
 	}
-	switch err.(type) {
-	case Error:
-		e := err.(Error)
+	var e Error
+	if errors.As(err, &e) {
 		res.Error.Code = e.Code
 		res.Error.Message = e.Message
 		if res.Error.Code == InvalidRpcVersion.Code {
 			res.JsonRpc = ""
 		}
 		return res
-	default:
-		res.Error.Code = InternalError.Code
-		res.Error.Message = err.Error()
-		return res
 	}
+	res.Error.Code = InternalError.Code
+	res.Error.Message = err.Error()
+	return res
 }
 
-func successResponse(req Request, body any) Response {
-	return Response{
+func successResponse(req Request[any], body any) Response[any] {
+	return Response[any]{
 		JsonRpc: req.JsonRpc,
 		Id:      req.Id,
 		Result:  body,
@@ -153,7 +174,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch reqPayload.(type) {
 	case []any:
 		payloads := reqPayload.([]any)
-		resp := make([]Response, len(payloads))
+		resp := make([]Response[any], len(payloads))
 		wg := sync.WaitGroup{}
 		wg.Add(len(payloads))
 		for i, payload := range payloads {
@@ -176,7 +197,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeResponse(w, errorResponse(&defaultReq, InvalidRequest))
 	}
 }
-func parseRequest(payload map[string]any) Request {
+func parseRequest(payload map[string]any) Request[any] {
 	req := defaultReq
 	version, ok := payload["jsonrpc"]
 	if ok {
@@ -194,7 +215,7 @@ func parseRequest(payload map[string]any) Request {
 	return req
 }
 
-func (s *Service) handle(ctx context.Context, req Request) Response {
+func (s *Service) handle(ctx context.Context, req Request[any]) Response[any] {
 	if req.JsonRpc != Version {
 		return errorResponse(&req, InvalidRpcVersion)
 	}
@@ -208,7 +229,7 @@ func (s *Service) handle(ctx context.Context, req Request) Response {
 	return successResponse(req, res)
 }
 
-func (s *Service) handleMethod(ctx context.Context, req Request) (any, error) {
+func (s *Service) handleMethod(ctx context.Context, req Request[any]) (any, error) {
 	fn, ok := s.methodMap[req.Method]
 	if !ok {
 		return nil, MethodNotFound
@@ -238,15 +259,15 @@ func (s *Service) handleMethod(ctx context.Context, req Request) (any, error) {
 	}
 }
 
-func (s *Service) AddService(services ...ServiceRegistrar) {
+func (s *Service) Register(services ...ServiceRegistrar) {
 	for _, srv := range services {
-		name, requestMap := srv.Register()
+		reg := srv.Registry()
 		nameFmt := "%s"
-		if name != "" {
+		if reg.name != "" {
 			nameFmt = "%s.%s"
 		}
-		for methodName, fn := range requestMap {
-			s.methodMap[fmt.Sprintf(nameFmt, name, methodName)] = fn
+		for methodName, fn := range reg.methods {
+			s.methodMap[fmt.Sprintf(nameFmt, reg.name, methodName)] = fn
 		}
 	}
 }

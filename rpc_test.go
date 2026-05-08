@@ -31,17 +31,17 @@ type (
 	}
 )
 
-func (s EchoService) Register() (string, rpc.RequestMap) {
-	return "EchoService", map[string]rpc.RequestFunc{
-		"Ping": s.Ping,
-		"Url":  s.Url,
-	}
+func (s EchoService) Registry() *rpc.ServiceRegistry {
+	r := rpc.NewRegistry("EchoService")
+	rpc.Handle(r, "Ping", s.Ping)
+	rpc.Handle(r, "Url", s.Url)
+	return r
 }
 
-func (ts TestService) Register() (string, rpc.RequestMap) {
-	return "TestService", map[string]rpc.RequestFunc{
-		"Exec": ts.Exec,
-	}
+func (ts TestService) Registry() *rpc.ServiceRegistry {
+	r := rpc.NewRegistry("TestService")
+	rpc.Handle(r, "Exec", ts.Exec)
+	return r
 }
 
 func (s TestService) MethodName() string {
@@ -113,7 +113,7 @@ func errorResponse(t *testing.T, resp *http.Response) (int, string) {
 
 func TestRpcServerResponses(t *testing.T) {
 	server := rpc.NewDefaultServer()
-	server.AddService(NewEchoService())
+	server.Register(NewEchoService())
 	req := requestObj(t, "EchoService.Ping", map[string]any{
 		"echo": "ping",
 	})
@@ -125,7 +125,7 @@ func TestRpcServerResponses(t *testing.T) {
 
 func TestRpcServerResponsesWithSpecialChars(t *testing.T) {
 	server := rpc.NewDefaultServer()
-	server.AddService(NewEchoService())
+	server.Register(NewEchoService())
 	req := requestObj(t, "EchoService.Url", map[string]any{})
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
@@ -135,7 +135,7 @@ func TestRpcServerResponsesWithSpecialChars(t *testing.T) {
 
 func TestRpcServer_ErrorResponses(t *testing.T) {
 	server := rpc.NewDefaultServer()
-	server.AddService(NewEchoService())
+	server.Register(NewEchoService())
 	req := requestObj(t, "EchoService.NonMethod", map[string]any{
 		"echo": "ping",
 	})
@@ -148,7 +148,7 @@ func TestRpcServer_ErrorResponses(t *testing.T) {
 
 func TestRpcServer_InvalidJsonRpcVersion(t *testing.T) {
 	server := rpc.NewDefaultServer()
-	server.AddService(NewEchoService())
+	server.Register(NewEchoService())
 	reqObj := map[string]any{
 		"jsonrpc": "1.0",
 		"method":  "EchoService.Ping",
@@ -170,7 +170,7 @@ func TestRpcServer_InvalidJsonRpcVersion(t *testing.T) {
 
 func TestRpcServer_EmptyMethodName(t *testing.T) {
 	server := rpc.NewDefaultServer()
-	server.AddService(NewEchoService())
+	server.Register(NewEchoService())
 	cases := []string{" ", "", "\n\n", "\t\n"}
 	for _, m := range cases {
 		t.Run("case "+m, func(t *testing.T) {
@@ -193,7 +193,7 @@ func TestRpcServer_ValidRequestParams(t *testing.T) {
 	ts.ProcessFn = func(_ context.Context, req *rpc.RequestParams) (any, error) {
 		return "ok", nil
 	}
-	server.AddService(ts)
+	server.Register(ts)
 	cases := []struct {
 		name  string
 		param any
@@ -224,7 +224,7 @@ func TestRequestParams_Bind(t *testing.T) {
 		require.NoError(t, err)
 		return s, nil
 	}
-	server.AddService(ts)
+	server.Register(ts)
 	rec := httptest.NewRecorder()
 	req := requestObj(t, ts.MethodName(), "hello")
 	server.ServeHTTP(rec, req)
@@ -234,7 +234,7 @@ func TestRequestParams_Bind(t *testing.T) {
 
 func TestRpcServer_MissingMethodField(t *testing.T) {
 	server := rpc.NewDefaultServer()
-	server.AddService(NewEchoService())
+	server.Register(NewEchoService())
 	reqObj := map[string]any{
 		"jsonrpc": rpc.Version,
 		"id":      "test",
@@ -253,7 +253,7 @@ func TestRpcServer_MissingMethodField(t *testing.T) {
 
 func TestRpcServer_BatchWithNonObjectItem(t *testing.T) {
 	server := rpc.NewDefaultServer()
-	server.AddService(NewEchoService())
+	server.Register(NewEchoService())
 	// Mix a valid request with a non-object element (a string)
 	reqObj := []any{
 		map[string]any{
@@ -297,7 +297,7 @@ func TestRpcServer_ExecutionTimeout(t *testing.T) {
 		time.Sleep(opts.ExecutionTimeout + (2 * time.Second))
 		return "ok", nil
 	}
-	server.AddService(ts)
+	server.Register(ts)
 	rec := httptest.NewRecorder()
 	req := requestObj(t, ts.MethodName(), nil)
 	server.ServeHTTP(rec, req)
@@ -326,7 +326,7 @@ func TestRpcServer_ExecuteMultipleRequests(t *testing.T) {
 			return "ok - " + s, nil
 		}
 	}
-	server.AddService(ts)
+	server.Register(ts)
 	rec := httptest.NewRecorder()
 
 	reqObj := []map[string]any{
@@ -441,7 +441,7 @@ func TestRpcServer_BodyTooLarge(t *testing.T) {
 		MaxBytesRead:     limit,
 		ExecutionTimeout: rpc.DefaultOpts.ExecutionTimeout,
 	})
-	server.AddService(NewEchoService())
+	server.Register(NewEchoService())
 	body := strings.Repeat("x", limit+1)
 	req, err := http.NewRequest(http.MethodPost, "", strings.NewReader(body))
 	require.NoError(t, err)
@@ -508,7 +508,7 @@ func TestRpcServer_NonStringMethodValue(t *testing.T) {
 // and the server does not panic or crash.
 func TestRpcServer_BatchWithNonObjectElement(t *testing.T) {
 	server := rpc.NewDefaultServer()
-	server.AddService(NewEchoService())
+	server.Register(NewEchoService())
 	cases := []struct {
 		name         string
 		body         string
@@ -590,7 +590,7 @@ func TestRpcServer_ExecutionTimeout_NoGoroutineLeak(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 		return "ok", nil
 	}
-	server.AddService(ts)
+	server.Register(ts)
 
 	rec := httptest.NewRecorder()
 	req := requestObj(t, ts.MethodName(), nil)
@@ -625,7 +625,7 @@ func TestRpcServer_AddService_ConcurrentServeHTTP(t *testing.T) {
 	t.Skip("BUG: AddService+ServeHTTP has an unsynchronised methodMap — skip until a mutex is added")
 	_ = raceEnabled // suppress unused-variable error when build tag is evaluated
 	server := rpc.NewDefaultServer()
-	server.AddService(NewEchoService())
+	server.Register(NewEchoService())
 
 	// Pre-construct all requests on the main goroutine so that requestObj
 	// (which calls require.* and touches t) is never used from a worker goroutine.
@@ -649,7 +649,7 @@ func TestRpcServer_AddService_ConcurrentServeHTTP(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			server.AddService(NewEchoService())
+			server.Register(NewEchoService())
 		}()
 	}
 	wg.Wait()
@@ -703,7 +703,7 @@ func TestRpcServer_PlainErrorUsesInternalCode(t *testing.T) {
 	ts.ProcessFn = func(_ context.Context, _ *rpc.RequestParams) (any, error) {
 		return nil, errors.New("something went wrong internally")
 	}
-	server.AddService(ts)
+	server.Register(ts)
 	rec := httptest.NewRecorder()
 	req := requestObj(t, ts.MethodName(), nil)
 	server.ServeHTTP(rec, req)
@@ -727,16 +727,12 @@ func TestRpcServer_WrappedRpcErrorPreservesCode(t *testing.T) {
 		// Wrap a known sentinel — errorResponse should surface MethodNotFound.Code.
 		return nil, fmt.Errorf("wrapped: %w", rpc.MethodNotFound)
 	}
-	server.AddService(ts)
+	server.Register(ts)
 	rec := httptest.NewRecorder()
 	req := requestObj(t, ts.MethodName(), nil)
 	server.ServeHTTP(rec, req)
 	code, _ := errorResponse(t, rec.Result())
-	// BUG: currently returns InternalError.Code because the type-switch misses
-	// the wrapped error. When fixed, this assertion should become:
-	//   assert.Equal(t, rpc.MethodNotFound.Code, code)
-	assert.Equal(t, rpc.InternalError.Code, code,
-		"BUG: wrapped rpc.Error loses its code; errorResponse should use errors.As")
+	assert.Equal(t, rpc.MethodNotFound.Code, code)
 }
 
 // ---------------------------------------------------------------------------
@@ -749,7 +745,7 @@ func TestRpcServer_WrappedRpcErrorPreservesCode(t *testing.T) {
 // so a spec-compliant fix can be tracked.
 func TestRpcServer_NotificationAlwaysResponds(t *testing.T) {
 	server := rpc.NewDefaultServer()
-	server.AddService(NewEchoService())
+	server.Register(NewEchoService())
 	// A notification has no "id" field.
 	body := `{"jsonrpc":"2.0","method":"EchoService.Ping","params":{"echo":"hi"}}`
 	req, err := http.NewRequest(http.MethodPost, "", strings.NewReader(body))
@@ -803,7 +799,7 @@ func TestRpcServer_ZeroExecutionTimeout(t *testing.T) {
 	ts.ProcessFn = func(_ context.Context, _ *rpc.RequestParams) (any, error) {
 		return "ok", nil
 	}
-	server.AddService(ts)
+	server.Register(ts)
 	rec := httptest.NewRecorder()
 	req := requestObj(t, ts.MethodName(), nil)
 	server.ServeHTTP(rec, req)
@@ -840,7 +836,7 @@ func TestDefaultOpts(t *testing.T) {
 func TestRpcServer_AddService_EmptyServiceName(t *testing.T) {
 	server := rpc.NewDefaultServer()
 	noNameService := noNameSvc{}
-	server.AddService(noNameService)
+	server.Register(noNameService)
 
 	rec := httptest.NewRecorder()
 	req := requestObj(t, "Greet", nil)
@@ -860,12 +856,12 @@ func TestRpcServer_AddService_EmptyServiceName(t *testing.T) {
 // noNameSvc is a ServiceRegistrar that returns "" as its service name.
 type noNameSvc struct{}
 
-func (noNameSvc) Register() (string, rpc.RequestMap) {
-	return "", rpc.RequestMap{
-		"Greet": func(_ context.Context, _ *rpc.RequestParams) (any, error) {
-			return "hello", nil
-		},
-	}
+func (noNameSvc) Registry() *rpc.ServiceRegistry {
+	r := rpc.NewRegistry("")
+	rpc.Handle(r, "Greet", func(_ context.Context, _ *rpc.RequestParams) (string, error) {
+		return "hello", nil
+	})
+	return r
 }
 
 // ---------------------------------------------------------------------------
@@ -876,7 +872,7 @@ func (noNameSvc) Register() (string, rpc.RequestMap) {
 // are not escaped in JSON output (SetEscapeHTML(false) is in effect).
 func TestRpcServer_HTMLEscapingDisabled(t *testing.T) {
 	server := rpc.NewDefaultServer()
-	server.AddService(NewEchoService())
+	server.Register(NewEchoService())
 	req := requestObj(t, "EchoService.Url", nil)
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
@@ -894,7 +890,7 @@ func TestRpcServer_HTMLEscapingDisabled(t *testing.T) {
 // Content-Type of application/json.
 func TestRpcServer_ContentTypeHeader(t *testing.T) {
 	server := rpc.NewDefaultServer()
-	server.AddService(NewEchoService())
+	server.Register(NewEchoService())
 	req := requestObj(t, "EchoService.Ping", map[string]any{"echo": "ct"})
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)

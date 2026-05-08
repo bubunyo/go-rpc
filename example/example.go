@@ -11,14 +11,14 @@ import (
 
 type PingService struct{}
 
-func (s PingService) Echo(_ context.Context, req *rpc.RequestParams) (any, error) {
+func (s PingService) Echo(_ context.Context, _ *rpc.RequestParams) (string, error) {
 	return "ok", nil
 }
 
-func (s PingService) Register() (string, rpc.RequestMap) {
-	return "PingService", map[string]rpc.RequestFunc{
-		"Ping": s.Echo,
-	}
+func (s PingService) Registry() *rpc.ServiceRegistry {
+	r := rpc.NewRegistry("PingService")
+	rpc.Handle(r, "Ping", s.Echo)
+	return r
 }
 
 func main() {
@@ -27,10 +27,10 @@ func main() {
 		ExecutionTimeout: 15 * time.Second, // max time a function should execute for.
 		MaxBytesRead:     1 << 20,          // (1mb) - the maximum size of the total request payload
 	})
-	// or use the default servver with
+	// or use the default server with
 	// server := rpc.NewDefaultServer()
 
-	server.AddService(PingService{})
+	server.Register(PingService{})
 
 	mux := http.NewServeMux()
 	mux.Handle("/rpc", server)
