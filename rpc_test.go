@@ -32,16 +32,14 @@ type (
 )
 
 func (s EchoService) Registry() *rpc.ServiceRegistry {
-	r := rpc.NewRegistry("EchoService")
-	rpc.Handle(r, "Ping", s.Ping)
-	rpc.Handle(r, "Url", s.Url)
-	return r
+	return rpc.NewRegistry("EchoService").
+		Handle("Ping", s.Ping).
+		Handle("Url", s.Url)
 }
 
 func (ts TestService) Registry() *rpc.ServiceRegistry {
-	r := rpc.NewRegistry("TestService")
-	rpc.Handle(r, "Exec", ts.Exec)
-	return r
+	return rpc.NewRegistry("TestService").
+		Handle("Exec", ts.Exec)
 }
 
 func (s TestService) MethodName() string {
@@ -857,11 +855,10 @@ func TestRpcServer_AddService_EmptyServiceName(t *testing.T) {
 type noNameSvc struct{}
 
 func (noNameSvc) Registry() *rpc.ServiceRegistry {
-	r := rpc.NewRegistry("")
-	rpc.Handle(r, "Greet", func(_ context.Context, _ *rpc.RequestParams) (string, error) {
-		return "hello", nil
-	})
-	return r
+	return rpc.NewRegistry("").
+		Handle("Greet", func(_ context.Context, _ *rpc.RequestParams) (any, error) {
+			return "hello", nil
+		})
 }
 
 // ---------------------------------------------------------------------------

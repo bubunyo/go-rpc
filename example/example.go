@@ -11,14 +11,13 @@ import (
 
 type PingService struct{}
 
-func (s PingService) Echo(_ context.Context, _ *rpc.RequestParams) (string, error) {
+func (s PingService) Echo(_ context.Context, _ *rpc.RequestParams) (any, error) {
 	return "ok", nil
 }
 
 func (s PingService) Registry() *rpc.ServiceRegistry {
-	r := rpc.NewRegistry("PingService")
-	rpc.Handle(r, "Ping", s.Echo)
-	return r
+	return rpc.NewRegistry("PingService").
+		Handle("Ping", s.Echo)
 }
 
 func main() {

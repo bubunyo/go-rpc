@@ -77,7 +77,7 @@ func TestErrorResponse_InvalidRpcVersion_BlanksJsonRpc(t *testing.T) {
 // TestErrorResponse_PreservesRequestID verifies that the response inherits
 // the Id from the request.
 func TestErrorResponse_PreservesRequestID(t *testing.T) {
-	req := Request[any]{JsonRpc: Version, Id: "req-42"}
+	req := Request{JsonRpc: Version, Id: "req-42"}
 	resp := errorResponse(&req, MethodNotFound)
 	assert.Equal(t, "req-42", resp.Id)
 }
