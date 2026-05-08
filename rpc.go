@@ -51,10 +51,9 @@ type (
 		executionTimeout time.Duration
 		maxBytesRead     int64
 	}
-	RequestFunc      = func(context.Context, *RequestParams) (any, error)
-	RequestMap       = map[string]RequestFunc
+	RequestFunc = func(context.Context, *RequestParams) (any, error)
 	ServiceRegistrar interface {
-		Register() (string, RequestMap)
+		Registry() *ServiceRegistry
 	}
 	Request struct {
 		JsonRpc string `json:"jsonrpc"` // must always be 2.0
@@ -82,26 +81,44 @@ func (p *RequestParams) Bind(v any) error {
 	return json.Unmarshal(p.Payload, v)
 }
 
+// ServiceRegistry holds the service name and its registered method handlers.
+type ServiceRegistry struct {
+	name    string
+	methods map[string]RequestFunc
+}
+
+// NewRegistry creates a ServiceRegistry with the given service name.
+func NewRegistry(name string) *ServiceRegistry {
+	return &ServiceRegistry{
+		name:    name,
+		methods: map[string]RequestFunc{},
+	}
+}
+
+// Handle registers a handler function under the given method name.
+func (r *ServiceRegistry) Handle(name string, fn RequestFunc) *ServiceRegistry {
+	r.methods[name] = fn
+	return r
+}
+
 func errorResponse(req *Request, err error) Response {
 	res := Response{
 		JsonRpc: req.JsonRpc,
 		Id:      req.Id,
 		Error:   &Error{},
 	}
-	switch err.(type) {
-	case Error:
-		e := err.(Error)
+	var e Error
+	if errors.As(err, &e) {
 		res.Error.Code = e.Code
 		res.Error.Message = e.Message
 		if res.Error.Code == InvalidRpcVersion.Code {
 			res.JsonRpc = ""
 		}
 		return res
-	default:
-		res.Error.Code = InternalError.Code
-		res.Error.Message = err.Error()
-		return res
 	}
+	res.Error.Code = InternalError.Code
+	res.Error.Message = err.Error()
+	return res
 }
 
 func successResponse(req Request, body any) Response {
@@ -176,6 +193,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeResponse(w, errorResponse(&defaultReq, InvalidRequest))
 	}
 }
+
 func parseRequest(payload map[string]any) Request {
 	req := defaultReq
 	version, ok := payload["jsonrpc"]
@@ -238,15 +256,16 @@ func (s *Service) handleMethod(ctx context.Context, req Request) (any, error) {
 	}
 }
 
-func (s *Service) AddService(services ...ServiceRegistrar) {
+// Register adds one or more ServiceRegistrar implementations to the server.
+func (s *Service) Register(services ...ServiceRegistrar) {
 	for _, srv := range services {
-		name, requestMap := srv.Register()
+		reg := srv.Registry()
 		nameFmt := "%s"
-		if name != "" {
+		if reg.name != "" {
 			nameFmt = "%s.%s"
 		}
-		for methodName, fn := range requestMap {
-			s.methodMap[fmt.Sprintf(nameFmt, name, methodName)] = fn
+		for methodName, fn := range reg.methods {
+			s.methodMap[fmt.Sprintf(nameFmt, reg.name, methodName)] = fn
 		}
 	}
 }
